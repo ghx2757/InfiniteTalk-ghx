@@ -136,7 +136,7 @@ def is_video(path):
     video_exts = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.mpeg', '.mpg']
     return os.path.splitext(path)[1].lower() in video_exts
 
-
+# 取视频的某帧或者输入的图像帧为RGB格式图
 def extract_specific_frames(video_path, frame_id):
     if is_video(video_path):
         vr = VideoReader(video_path, ctx=cpu(0))
@@ -151,6 +151,7 @@ def extract_specific_frames(video_path, frame_id):
         frame = Image.open(video_path).convert("RGB")
     return frame
 
+# 获取视频编码格式
 def get_video_codec(video_path):
     result = subprocess.run(
         ['ffprobe', '-v', 'error', '-select_streams', 'v:0',

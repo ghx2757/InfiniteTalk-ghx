@@ -37,6 +37,7 @@ SIZE_CONFIGS = {
     '1024*1024': (1024, 1024),
     'infinitetalk-480': (640, 640),
     'infinitetalk-720': (960, 960),
+    'infinitetalk-512': (512, 512),
 }
 
 MAX_AREA_CONFIGS = {
@@ -54,5 +55,5 @@ SUPPORTED_SIZES = {
     't2i-14B': tuple(SIZE_CONFIGS.keys()),
     'vace-1.3B': ('480*832', '832*480'),
     'vace-14B': ('720*1280', '1280*720', '480*832', '832*480'),
-    'infinitetalk-14B': ('infinitetalk-480', 'infinitetalk-720'),
+    'infinitetalk-14B': ('infinitetalk-480', 'infinitetalk-720', 'infinitetalk-512'),
 }

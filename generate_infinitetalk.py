@@ -6,7 +6,7 @@ import sys
 import json
 import warnings
 from datetime import datetime
-
+import time
 warnings.filterwarnings('ignore')
 
 import random
@@ -85,7 +85,7 @@ def _parse_args():
     parser.add_argument(
         "--max_frame_num",
         type=int,
-        default=1000,
+        default=1000000,
         help="The max frame lenght of the generated video."
     )
     parser.add_argument(
@@ -323,6 +323,7 @@ def _init_logging(rank):
 def get_embedding(speech_array, wav2vec_feature_extractor, audio_encoder, sr=16000, device='cpu'):
     audio_duration = len(speech_array) / sr
     video_length = audio_duration * 25 # Assume the video fps is 25
+    # video_length = audio_duration * 16
 
     # wav2vec_feature_extractor
     audio_feature = np.squeeze(
@@ -457,18 +458,18 @@ def generate(args):
     device = local_rank
     _init_logging(rank)
 
-    if args.offload_model is None:
+    if args.offload_model is None: # 单Gpu 启用模型卸载策略
         args.offload_model = False if world_size > 1 else True
         logging.info(
             f"offload_model is not specified, set to {args.offload_model}.")
-    if world_size > 1:
+    if world_size > 1: # 分布式环境初始化
         torch.cuda.set_device(local_rank)
         dist.init_process_group(
             backend="nccl",
             init_method="env://",
             rank=rank,
             world_size=world_size)
-    else:
+    else: # 非分布式环境检查不支持的参数
         assert not (
             args.t5_fsdp or args.dit_fsdp
         ), f"t5_fsdp and dit_fsdp are not supported in non-distributed environments."
@@ -476,6 +477,7 @@ def generate(args):
             args.ulysses_size > 1 or args.ring_size > 1
         ), f"context parallel are not supported in non-distributed environments."
 
+    # 分布式环境下初始化模型并行
     if args.ulysses_size > 1 or args.ring_size > 1:
         assert args.ulysses_size * args.ring_size == world_size, f"The number of ulysses_size and ring_size should be equal to the world size."
         from xfuser.core.distributed import (
@@ -506,14 +508,14 @@ def generate(args):
     #         raise NotImplementedError(
     #             f"Unsupport prompt_extend_method: {args.prompt_extend_method}")
 
-    cfg = WAN_CONFIGS[args.task]
+    cfg = WAN_CONFIGS[args.task] # 加载模型配置
     if args.ulysses_size > 1:
         assert cfg.num_heads % args.ulysses_size == 0, f"`{cfg.num_heads=}` cannot be divided evenly by `{args.ulysses_size=}`."
 
     logging.info(f"Generation job args: {args}")
     logging.info(f"Generation model config: {cfg}")
 
-    if dist.is_initialized():
+    if dist.is_initialized(): # 同步随机种子
         base_seed = [args.base_seed] if rank == 0 else [None]
         dist.broadcast_object_list(base_seed, src=0)
         args.base_seed = base_seed[0]
@@ -521,7 +523,7 @@ def generate(args):
     assert args.task == "infinitetalk-14B", 'You should choose infinitetalk in args.task.'
     
 
-    logging.info("Creating infinitetalk pipeline.")
+    logging.info("===> Creating infinitetalk pipeline.")
     wan_i2v = wan.InfiniteTalkPipeline(
         config=cfg,
         checkpoint_dir=args.ckpt_dir,
@@ -538,23 +540,43 @@ def generate(args):
         dit_path=args.dit_path,
         infinitetalk_dir=args.infinitetalk_dir
     )
-    if args.num_persistent_param_in_dit is not None:
+    if args.num_persistent_param_in_dit is not None: # 如果指定，则启用DiT显存管理
         wan_i2v.vram_management = True
         wan_i2v.enable_vram_management(
             num_persistent_param_in_dit=args.num_persistent_param_in_dit
         )
     
-    generated_list = []
-    with open(args.input_json, 'r', encoding='utf-8') as f:
+    generated_list = [] # 存储生成结果
+    with open(args.input_json, 'r', encoding='utf-8') as f: # 读取输入条件文件
         input_data = json.load(f)
         
     wav2vec_feature_extractor, audio_encoder= custom_init('cpu', args.wav2vec_dir)
-    args.audio_save_dir = os.path.join(args.audio_save_dir, input_data['cond_video'].split('/')[-1].split('.')[0])
+    # args.audio_save_dir = os.path.join(args.audio_save_dir, input_data['cond_video'].split('/')[-1].split('.')[0]) # src 
+    args.audio_save_dir = os.path.join(args.audio_save_dir, input_data['cond_audio']["person1"].split('/')[-1].split('.')[0]) # by ghx
     os.makedirs(args.audio_save_dir,exist_ok=True)
     
     conds_list = []
 
-    if args.scene_seg and is_video(input_data['cond_video']):
+    # 输入: cond_video + cond_audio (person1, person2可选)
+    # │
+    # ├─ 场景切分启用 & 是视频？
+    # │  │
+    # │  ├─ 是 → shot_detect() 检测场景
+    # │  │   │
+    # │  │   ├─ 无切换点 (time_list为空)
+    # │  │   │   └─ 完整视频 + 完整音频 → conds_list
+    # │  │   │
+    # │  │   └─ 有切换点
+    # │  │       ├─ 视频切分 → cond_list
+    # │  │       ├─ 音频1切分 → audio1_list
+    # │  │       └─ 音频2切分 → audio2_list (可选)
+    # │  │           └─ 所有片段 → conds_list
+    # │  │
+    # │  └─ 否 → 整体处理
+    # │      └─ [完整视频], [完整音频1], [完整音频2可选] → conds_list
+    # │
+    # 输出: conds_list = [[视频片段...], [音频1片段...], [音频2片段...]]
+    if args.scene_seg and is_video(input_data['cond_video']): # 场景切分
         time_list, cond_list = shot_detect(input_data['cond_video'], args.audio_save_dir)
         if len(time_list)==0:
             conds_list.append([input_data['cond_video']])
@@ -574,7 +596,8 @@ def generate(args):
         if len(input_data['cond_audio'])==2:
             conds_list.append([input_data['cond_audio']['person2']])
 
-    if len(input_data['cond_audio'])==2:
+    # 输出视频的音频处理，单人就是输入的音频，多人就是将多个人的音频进行合并
+    if len(input_data['cond_audio'])==2: # 多人情况
         new_human_speech1, new_human_speech2, sum_human_speechs = audio_prepare_multi(input_data['cond_audio']['person1'], input_data['cond_audio']['person2'], input_data['audio_type'])
         sum_audio = os.path.join(args.audio_save_dir, 'sum_all.wav')
         sf.write(sum_audio, sum_human_speechs, 16000)
@@ -583,14 +606,15 @@ def generate(args):
         human_speech = audio_prepare_single(input_data['cond_audio']['person1'])
         sum_audio = os.path.join(args.audio_save_dir, 'sum_all.wav')
         sf.write(sum_audio, human_speech, 16000)
-        input_data['video_audio'] = sum_audio
-    logging.info("Generating video ...")
+        input_data['video_audio'] = sum_audio # 用于最后输出视频中的音频
+
+    logging.info("===> Generating video ...")
         
-    for idx, items in enumerate(zip(*conds_list)):
+    for idx, items in enumerate(zip(*conds_list)): # 这个循环是场景切片循环，如果没有切片就是只循环一次
         print(items)
         input_clip = {}
-        input_clip['prompt'] = input_data['prompt']
-        input_clip['cond_video'] = items[0]
+        input_clip['prompt'] = input_data['prompt'] # 1、输入prompt
+        input_clip['cond_video'] = items[0] # 2、输入视频/图像
 
         if 'audio_type' in input_data:
             input_clip['audio_type'] = input_data['audio_type']
@@ -616,15 +640,18 @@ def generate(args):
                 human_speech = audio_prepare_single(items[1])
                 audio_embedding = get_embedding(human_speech, wav2vec_feature_extractor, audio_encoder)
                 emb_path = os.path.join(args.audio_save_dir, '1.pt')
-                sum_audio = os.path.join(args.audio_save_dir, 'sum.wav')
+                sum_audio = os.path.join(args.audio_save_dir, 'sum.wav') # 这一场景的音频路径/如果没有切分，等于sum_all.wav
                 sf.write(sum_audio, human_speech, 16000)
                 torch.save(audio_embedding, emb_path)
                 cond_audio['person1'] = emb_path
-                input_clip['video_audio'] = sum_audio
+                input_clip['video_audio'] = sum_audio # 3、输入音频
                 v_length = audio_embedding.shape[0]
         
-        input_clip['cond_audio'] = cond_audio
-                    
+        input_clip['cond_audio'] = cond_audio # 4、输入音频embedding路径
+
+        # 记录开始时间
+        start_time = time.time()
+        print(f"===> Generate Start Time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time))}")      
         video = wan_i2v.generate_infinitetalk(
             input_clip,
             size_buckget=args.size,
@@ -640,7 +667,14 @@ def generate(args):
             color_correction_strength = args.color_correction_strength,
             extra_args=args,
             )
-        
+        # 计算并打印总运行时间
+        end_time = time.time()
+        total_time = end_time - start_time    
+        print(f"\n{'='*50}")
+        print(f"===> Generate End Time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end_time))}")
+        print(f"===> Generate Time Cost(Seconds): {total_time:.3f}s")
+        print(f"{'='*50}")
+            
         generated_list.append(video)
 
     if rank == 0:
@@ -652,7 +686,9 @@ def generate(args):
             args.save_file = f"{args.task}_{args.size.replace('*','x') if sys.platform=='win32' else args.size}_{args.ulysses_size}_{args.ring_size}_{formatted_prompt}_{formatted_time}"
         
         sum_video = torch.cat(generated_list, dim=1)
-        save_video_ffmpeg(sum_video, args.save_file, [input_data['video_audio']], high_quality_save=False)
+        save_video_ffmpeg(sum_video, args.save_file, [input_data['video_audio']], high_quality_save=False) # 25
+        # save_video_ffmpeg(sum_video, args.save_file, [input_data['video_audio']], high_quality_save=False, fps=16)
+
    
     logging.info(f"Saving generated video to {args.save_file}.mp4")  
     logging.info("Finished.")

@@ -438,7 +438,48 @@ class WanModel(ModelMixin, ConfigMixin):
         'patch_size', 'cross_attn_norm', 'qk_norm', 'text_dim', 'window_size'
     ]
     _no_split_modules = ['WanAttentionBlock']
-
+class WanModel(ModelMixin, ConfigMixin):
+    # ============================================================
+    # __init__ 函数逻辑梳理:
+    # ============================================================
+    # 输入: 模型配置参数
+    # │
+    # ├─ 1. 模型类型检查与基础参数设置
+    # │   └─ assert model_type == 'i2v' → 保存所有配置参数
+    # │
+    # ├─ 2. Embeddings 层初始化
+    # │   ├─ patch_embedding: Conv3d → 视频patch嵌入
+    # │   ├─ text_embedding: Linear→GELU→Linear → 文本嵌入
+    # │   └─ time_embedding: Linear→SiLU→Linear → 时间步嵌入
+    # │       └─ time_projection: SiLU→Linear(6*dim) → 时间调制投影
+    # │
+    # ├─ 3. Attention Blocks 初始化
+    # │   └─ 创建 num_layers 个 WanAttentionBlock
+    # │       ├─ 包含 Self-Attention
+    # │       ├─ 包含 Cross-Attention (文本)
+    # │       ├─ 包含 Audio Cross-Attention
+    # │       └─ 包含 FFN
+    # │
+    # ├─ 4. 输出 Head 初始化
+    # │   └─ Head(dim, out_dim, patch_size) → unpatchify输出层
+    # │
+    # ├─ 5. RoPE 频率参数初始化
+    # │   └─ freqs = [rope_params×3] → 时空位置编码
+    # │
+    # ├─ 6. 图像投影模块 (i2v模式)
+    # │   └─ img_emb: MLPProj(1280→dim) → CLIP特征投影
+    # │
+    # ├─ 7. 音频投影模块初始化
+    # │   └─ audio_proj: AudioProjModel → 音频特征处理
+    # │       ├─ seq_len: audio_window
+    # │       ├─ seq_len_vf: audio_window + vae_scale - 1
+    # │       └─ output_dim, context_tokens, norm设置
+    # │
+    # └─ 8. 权重初始化
+    #     └─ weight_init=True → init_weights()
+    #
+    # ============================================================
+    
     @register_to_config
     def __init__(self,
                  model_type='i2v',
@@ -494,19 +535,19 @@ class WanModel(ModelMixin, ConfigMixin):
         
 
         # embeddings
-        self.patch_embedding = nn.Conv3d(
+        self.patch_embedding = nn.Conv3d( # 【patch_embedding】
             in_dim, dim, kernel_size=patch_size, stride=patch_size)
-        self.text_embedding = nn.Sequential(
+        self.text_embedding = nn.Sequential( # 【text_embedding】
             nn.Linear(text_dim, dim), nn.GELU(approximate='tanh'),
             nn.Linear(dim, dim))
 
-        self.time_embedding = nn.Sequential(
+        self.time_embedding = nn.Sequential( # 【时间步嵌入】
             nn.Linear(freq_dim, dim), nn.SiLU(), nn.Linear(dim, dim))
-        self.time_projection = nn.Sequential(nn.SiLU(), nn.Linear(dim, dim * 6))
+        self.time_projection = nn.Sequential(nn.SiLU(), nn.Linear(dim, dim * 6)) # 【时间调制投影】
 
         # blocks
         cross_attn_type = 'i2v_cross_attn'
-        self.blocks = nn.ModuleList([
+        self.blocks = nn.ModuleList([ # 【Attention Blocks】
             WanAttentionBlock(cross_attn_type, dim, ffn_dim, num_heads,
                               window_size, qk_norm, cross_attn_norm, eps, 
                               output_dim=output_dim, norm_input_visual=norm_input_visual)
@@ -514,10 +555,10 @@ class WanModel(ModelMixin, ConfigMixin):
         ])
 
         # head
-        self.head = Head(dim, out_dim, patch_size, eps)
+        self.head = Head(dim, out_dim, patch_size, eps) #【输出 Head】
 
         assert (dim % num_heads) == 0 and (dim // num_heads) % 2 == 0
-        d = dim // num_heads
+        d = dim // num_heads # 【 RoPE 频率参数初始化】
         self.freqs = torch.cat([
             rope_params(1024, d - 4 * (d // 6)),
             rope_params(1024, 2 * (d // 6)),
@@ -525,13 +566,13 @@ class WanModel(ModelMixin, ConfigMixin):
         ],
                                dim=1)
 
-        if model_type == 'i2v':
-            self.img_emb = MLPProj(1280, dim)
+        if model_type == 'i2v': 
+            self.img_emb = MLPProj(1280, dim) # 【CLIP特征投影】
         else:
             raise NotImplementedError('Not supported model type.')
         
         # init audio adapter
-        self.audio_proj = AudioProjModel(
+        self.audio_proj = AudioProjModel( # 【音频投影】
                     seq_len=audio_window,
                     seq_len_vf=audio_window+vae_scale-1,
                     intermediate_dim=intermediate_dim,
@@ -594,7 +635,77 @@ class WanModel(ModelMixin, ConfigMixin):
     
     def disable_teacache(self):
         self.enable_teacache = False
-
+# forward 函数逻辑梳理:
+    # ============================================================
+    # 输入: x(视频latent), t(时间步), context(文本), clip_fea, y(引导), audio, ref_target_masks
+    # │
+    # ├─ 1. 输入预处理与尺寸计算
+    # │   ├─ 获取 T, H, W → 计算 patch后的 N_t, N_h, N_w
+    # │   └─ y存在? → x = [cat(x[i], y[i])] (引导合并)
+    # │
+    # ├─ 2. Patch Embedding处理
+    # │   ├─ x → patch_embedding(Conv3d)
+    # │   ├─ 记录 grid_sizes, seq_lens
+    # │   └─ flatten + padding到seq_len
+    # │
+    # ├─ 3. 时间Embedding
+    # │   ├─ t → sinusoidal_embedding_1d → time_embedding
+    # │   └─ e → time_projection → e0 [B, 6, dim] (调制参数)
+    # │
+    # ├─ 4. 文本Embedding
+    # │   └─ context → text_embedding + padding到text_len
+    # │
+    # ├─ 5. CLIP特征融合
+    # │   └─ clip_fea → img_emb → concat到context前面
+    # │
+    # ├─ 6. 音频特征处理
+    # │   ├─ audio分离: first_frame + latter_frame
+    # │   ├─ latter_frame重排: (b, n_t*vae_scale, w, s, c) → (b, n_t, vae_scale, w, s, c)
+    # │   ├─ 按时间窗口提取:
+    # │   │   ├─ 首帧: [:middle_index+1] → latter_first_frame_audio_emb
+    # │   │   ├─ 中间帧: [middle_index:middle_index+1] → latter_middle_frame_audio_emb
+    # │   │   └─ 末帧: [middle_index:] → latter_last_frame_audio_emb
+    # │   ├─ concat三部分 → latter_frame_audio_emb_s
+    # │   └─ audio_proj(first_frame, latter_frame) → audio_embedding [human_num, f, m, c]
+    # │
+    # ├─ 7. 参考目标Masks处理
+    # │   └─ ref_target_masks存在?
+    # │       └─ interpolate到(N_h, N_w) → token级别masks
+    # │
+    # ├─ 8. TeaCache加速逻辑 (可选)
+    # │   │
+    # │   ├─ enable_teacache=True?
+    # │   │   ├─ 根据 cnt%3 区分: cond(0) / drop_text(1) / uncond(2)
+    # │   │   ├─ 计算 accumulated_rel_l1_distance (累积L1距离)
+    # │   │   ├─ distance < thresh?
+    # │   │   │   ├─ 是 → should_calc=False (重用缓存)
+    # │   │   │   └─ 否 → should_calc=True (重新计算)
+    # │   │   └─ 保存 previous_e0, previous_residual
+    # │   │
+    # │   └─ enable_teacache=False?
+    # │       └─ 正常执行所有blocks
+    # │
+    # ├─ 9. Attention Blocks处理
+    # │   ├─ 构建kwargs参数包 (e0, seq_lens, grid_sizes, freqs, context, audio_embedding, masks, human_num)
+    # │   │
+    # │   └─ TeaCache启用?
+    # │       ├─ 是 → 根据should_calc决定:
+    # │       │   ├─ should_calc=True → 正常执行blocks, 保存residual
+    # │       │   └─ should_calc=False → x += previous_residual (跳过计算)
+    # │       │
+    # │       └─ 否 → for block in blocks: x = block(x, **kwargs)
+    # │
+    # ├─ 10. Head输出层
+    # │   └─ head(x, e) → patch级输出
+    # │
+    # ├─ 11. Unpatchify恢复
+    # │   └─ unpatchify(x, grid_sizes) → 恢复视频tensor形状
+    # │
+    # └─ 12. TeaCache计数更新
+    #     └─ enable_teacache → cnt+=1, 到num_steps时重置
+    #
+    # 输出: List[Tensor] → [C_out, F, H, W] 视频latent
+    # ============================================================
     def forward(
             self,
             x,

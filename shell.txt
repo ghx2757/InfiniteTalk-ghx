@@ -1,0 +1,83 @@
+GPU_NUM=4
+torchrun --nproc_per_node=$GPU_NUM --standalone generate_infinitetalk.py \
+    --ckpt_dir /root/group-shared/digital-human/ghx/infinitetalk/Wan2.1-I2V-14B-480P \
+    --wav2vec_dir '/root/group-shared/digital-human/ghx/infinitetalk/chinese-wav2vec2-base' \
+    --infinitetalk_dir /root/group-shared/digital-human/ghx/infinitetalk/MeiGen-InfiniteTalk/single/infinitetalk.safetensors \
+    --lora_dir /root/group-shared/digital-human/ghx/infinitetalk/Wan14BT2VFusioniX/FusionX_LoRa/Wan2.1_I2V_14B_FusionX_LoRA.safetensors \
+    --input_json examples/sxy-image.json \
+    --lora_scale 1.0 \
+    --size infinitetalk-480 \
+    --sample_text_guide_scale 1.0 \
+    --sample_audio_guide_scale 2.0 \
+    --sample_steps 4 \
+    --mode streaming \
+    --motion_frame 9 \
+    --sample_shift 2 \
+    --num_persistent_param_in_dit 0 \
+    --save_file output/sxy/fusionix-4step-image-multi
+
+======================================================================
+GPU_NUM=4
+torchrun --nproc_per_node=$GPU_NUM --standalone generate_infinitetalk.py \
+    --ckpt_dir /root/group-shared/digital-human/ghx/infinitetalk/Wan2.1-I2V-14B-480P \
+    --wav2vec_dir '/root/group-shared/digital-human/ghx/infinitetalk/chinese-wav2vec2-base' \
+    --infinitetalk_dir /root/group-shared/digital-human/ghx/infinitetalk/MeiGen-InfiniteTalk/single/infinitetalk.safetensors \
+    --lora_dir /root/group-shared/digital-human/ghx/infinitetalk/Wan14BT2VFusioniX/FusionX_LoRa/Wan2.1_I2V_14B_FusionX_LoRA.safetensors \
+    --input_json examples/lmy-image.json \
+    --lora_scale 1.0 \
+    --size infinitetalk-480 \
+    --sample_text_guide_scale 1.0 \
+    --sample_audio_guide_scale 2.0 \
+    --sample_steps 4 \
+    --mode streaming \
+    --motion_frame 9 \
+    --sample_shift 2 \
+    --num_persistent_param_in_dit 0 \
+    --save_file output/sxy/fusionix-4step-image-multi
+
+# single FusionX_LoRa
+CUDA_VISIBLE_DEVICES=0 python generate_infinitetalk.py \
+    --ckpt_dir /root/group-shared/digital-human/ghx/infinitetalk/Wan2.1-I2V-14B-480P \
+    --wav2vec_dir '/root/group-shared/digital-human/ghx/infinitetalk/chinese-wav2vec2-base' \
+    --infinitetalk_dir /root/group-shared/digital-human/ghx/infinitetalk/MeiGen-InfiniteTalk/single/infinitetalk.safetensors \
+    --lora_dir /root/group-shared/digital-human/ghx/infinitetalk/Wan14BT2VFusioniX/FusionX_LoRa/Wan2.1_I2V_14B_FusionX_LoRA.safetensors \
+    --input_json examples/sxy-image.json \
+    --lora_scale 1.0 \
+    --size infinitetalk-480 \
+    --sample_text_guide_scale 1.0 \
+    --sample_audio_guide_scale 2.0 \
+    --sample_steps 4 \
+    --mode streaming \
+    --motion_frame 9 \
+    --sample_shift 2 \
+    --num_persistent_param_in_dit 0 \
+    --save_file output/sxy/fusionX-25fps-cfg-640 \
+    --use_apg
+
+# single lightx2v   
+CUDA_VISIBLE_DEVICES=1 python generate_infinitetalk.py \
+    --ckpt_dir /root/group-shared/digital-human/ghx/infinitetalk/Wan2.1-I2V-14B-480P \
+    --wav2vec_dir '/root/group-shared/digital-human/ghx/infinitetalk/chinese-wav2vec2-base' \
+    --infinitetalk_dir /root/group-shared/digital-human/ghx/infinitetalk/MeiGen-InfiniteTalk/single/infinitetalk.safetensors \
+    --lora_dir /root/group-shared/digital-human/ghx/infinitetalk/Wan2.1-Distill-Loras/wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors \
+    --input_json examples/sxy-image.json \
+    --lora_scale 1.0 \
+    --size infinitetalk-480 \
+    --sample_text_guide_scale 1.0 \
+    --sample_audio_guide_scale 2.0 \
+    --sample_steps 4 \
+    --mode streaming \
+    --motion_frame 9 \
+    --sample_shift 2 \
+    --num_persistent_param_in_dit 0 \
+    --save_file output/sxy/lightx2v-25fps-cfg-640 \
+    --use_apg
+
+
+
+
+
+# 0、视频保存策略调整+高质量视频保存，（可以先测一下）
+# 1、首先验证长视频推理 （两个量化权重）
+# 2、16fps + 512*512 + teacache + 超分 + 效率测试（两个量化权重），fps的修改需要两处->get_em和save-video
+# 3、apg推理测试
