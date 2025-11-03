@@ -921,7 +921,7 @@ class InfiniteTalkPipeline:
             txt_path = os.path.join(save_dir, "clips.txt")
             with open(txt_path, 'w') as f:
                 for segment_path in saved_segments:
-                    f.write(f"{segment_path}\n")
+                    f.write(f"file '{segment_path}'\n")
 
         # return gen_video_samples[0] if self.rank == 0 else None
         return None
