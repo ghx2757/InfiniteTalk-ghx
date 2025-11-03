@@ -152,4 +152,12 @@ CUDA_VISIBLE_DEVICES=3 python generate_infinitetalk.py \
 
 
 
-    # 拼接视频序列片段
+# 拼接视频序列片段
+选用：sed -i "s/^/file '/;s/$/'/" clips.txt
+ffmpeg -f concat -safe 0 -i clips.txt -i background_audio.mp3 \
+    -c:v copy -c:a aac -strict experimental \
+    -shortest output_with_audio.mp4
+-i background_audio.mp3：指定额外音频文件（支持 MP3、WAV 等格式）
+-c:v copy：视频流仍直接复制（节省时间）
+-c:a aac：音频重新编码为 AAC（MP4 推荐格式）
+-shortest：视频长度以较短的一方（视频总时长或音频时长）为准

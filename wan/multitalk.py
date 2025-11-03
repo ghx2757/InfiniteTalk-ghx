@@ -841,7 +841,7 @@ class InfiniteTalkPipeline:
                 gen_video = torch.cat(gen_video_list, dim=2)
                 gen_video = gen_video.to(torch.float32)  
 
-                segment_path = os.path.join(save_dir, f"{segment_counter:04d}.MP4")
+                segment_path = os.path.join(save_dir, f"{segment_counter:04d}")
                 save_video_ffmpeg_noaudio(gen_video[0], segment_path, high_quality_save=True)
                 saved_segments.append(segment_path)
 
@@ -852,7 +852,7 @@ class InfiniteTalkPipeline:
                 gen_video = torch.cat(gen_video_list, dim=2)
                 gen_video = gen_video.to(torch.float32)  
 
-                segment_path = os.path.join(save_dir, f"{segment_counter:04d}.MP4")
+                segment_path = os.path.join(save_dir, f"{segment_counter:04d}")
                 save_video_ffmpeg_noaudio(gen_video[0], segment_path, high_quality_save=True)
                 saved_segments.append(segment_path)
 
@@ -921,7 +921,8 @@ class InfiniteTalkPipeline:
             txt_path = os.path.join(save_dir, "clips.txt")
             with open(txt_path, 'w') as f:
                 for segment_path in saved_segments:
-                    f.write(f"file '{segment_path}'\n")
+                    relative_path = os.path.relpath(segment_path, save_dir)
+                    f.write(f"file '{relative_path}'\n")
 
         # return gen_video_samples[0] if self.rank == 0 else None
         return None
