@@ -666,6 +666,7 @@ def generate(args):
             max_frames_num=args.frame_num if args.mode == 'clip' else args.max_frame_num,
             color_correction_strength = args.color_correction_strength,
             extra_args=args,
+            save_file=args.save_file
             )
         # 计算并打印总运行时间
         end_time = time.time()
@@ -675,19 +676,19 @@ def generate(args):
         print(f"===> Generate Time Cost(Seconds): {total_time:.3f}s")
         print(f"{'='*50}")
             
-        generated_list.append(video)
+    #     generated_list.append(video)
 
-    if rank == 0:
+    # if rank == 0:
         
-        if args.save_file is None:
-            formatted_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-            formatted_prompt = input_clip['prompt'].replace(" ", "_").replace("/",
-                                                                        "_")[:50]
-            args.save_file = f"{args.task}_{args.size.replace('*','x') if sys.platform=='win32' else args.size}_{args.ulysses_size}_{args.ring_size}_{formatted_prompt}_{formatted_time}"
+    #     if args.save_file is None:
+    #         formatted_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    #         formatted_prompt = input_clip['prompt'].replace(" ", "_").replace("/",
+    #                                                                     "_")[:50]
+    #         args.save_file = f"{args.task}_{args.size.replace('*','x') if sys.platform=='win32' else args.size}_{args.ulysses_size}_{args.ring_size}_{formatted_prompt}_{formatted_time}"
         
-        sum_video = torch.cat(generated_list, dim=1)
-        save_video_ffmpeg(sum_video, args.save_file, [input_data['video_audio']], high_quality_save=False) # 25
-        # save_video_ffmpeg(sum_video, args.save_file, [input_data['video_audio']], high_quality_save=False, fps=16)
+    #     sum_video = torch.cat(generated_list, dim=1)
+    #     save_video_ffmpeg(sum_video, args.save_file, [input_data['video_audio']], high_quality_save=True) # 25
+    #     # save_video_ffmpeg(sum_video, args.save_file, [input_data['video_audio']], high_quality_save=False, fps=16)
 
    
     logging.info(f"Saving generated video to {args.save_file}.mp4")  

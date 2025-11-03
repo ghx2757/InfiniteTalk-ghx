@@ -314,6 +314,48 @@ def save_video_ffmpeg(gen_video_samples, save_path, vocal_audio_list, fps=25, qu
         os.remove(save_path_crop_audio)
 
 
+def save_video_ffmpeg_noaudio(gen_video_samples, save_path, fps=25, quality=5, high_quality_save=False):
+    
+    def save_video(frames, save_path, fps, quality=9, ffmpeg_params=None):
+        writer = imageio.get_writer(
+            save_path, fps=fps, quality=quality, ffmpeg_params=ffmpeg_params
+        )
+        for frame in tqdm(frames, desc="Saving video"):
+            frame = np.array(frame)
+            writer.append_data(frame)
+        writer.close()
+    save_path_tmp = save_path + "-temp.mp4"
+
+    if high_quality_save:
+        cache_video(
+                    tensor=gen_video_samples.unsqueeze(0),
+                    save_file=save_path_tmp,
+                    fps=fps,
+                    nrow=1,
+                    normalize=True,
+                    value_range=(-1, 1)
+                    )
+    else:
+        video_audio = (gen_video_samples+1)/2  # C T H W
+        video_audio = video_audio.permute(1, 2, 3, 0).cpu().numpy()
+        video_audio = np.clip(video_audio * 255, 0, 255).astype(np.uint8)  # to [0, 255]
+        save_video(video_audio, save_path_tmp, fps=fps, quality=quality)
+
+
+    # 直接将临时视频重命名为最终视频（无需处理音频）
+    save_path = save_path + ".mp4"
+    # 使用ffmpeg仅复制视频流（去除任何可能的音频）
+    final_command = [
+        "ffmpeg",
+        "-y",
+        "-i", save_path_tmp,
+        "-c:v", "copy",  # 直接复制视频流，不重新编码
+        "-an",  # 禁用音频
+        save_path
+    ]
+    subprocess.run(final_command, check=True)
+    os.remove(save_path_tmp)  # 删除临时文件
+
 class MomentumBuffer:
     def __init__(self, momentum: float): 
         self.momentum = momentum 

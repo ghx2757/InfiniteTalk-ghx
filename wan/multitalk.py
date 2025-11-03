@@ -29,7 +29,7 @@ from .modules.clip import CLIPModel
 from .modules.multitalk_model import WanModel, WanLayerNorm, WanRMSNorm
 from .modules.t5 import T5EncoderModel, T5LayerNorm, T5RelativeEmbedding
 from .modules.vae import WanVAE, CausalConv3d, RMS_norm, Upsample
-from .utils.multitalk_utils import MomentumBuffer, adaptive_projected_guidance, match_and_blend_colors
+from .utils.multitalk_utils import MomentumBuffer, adaptive_projected_guidance, match_and_blend_colors, save_video_ffmpeg_noaudio
 from src.vram_management import AutoWrappedQLinear, AutoWrappedLinear, AutoWrappedModule, enable_vram_management
 from wan.utils.utils import convert_video_to_h264, extract_specific_frames, get_video_codec
 from wan.wan_lora import WanLoraWrapper
@@ -416,6 +416,7 @@ class InfiniteTalkPipeline:
                  face_scale=0.05,
                  progress=True,
                  color_correction_strength=0.0,
+                 save_file=None,
                  extra_args=None):
         r"""
         Generates video frames from input image and text prompt using diffusion process.
@@ -535,6 +536,14 @@ class InfiniteTalkPipeline:
         audio_start_idx = 0
         audio_end_idx = audio_start_idx + clip_length
         gen_video_list = []
+
+        # Initialize variables for segmented video saving
+        segment_counter = 0 # 视频片段计数器
+        saved_segments = [] # 保存视频片段的路径列表
+        save_dir = None # 视频保存目录
+        if save_file is not None:
+            save_dir = save_file
+            os.makedirs(save_dir, exist_ok=True)
         torch_gc()
 
         # set random seed and init noise
@@ -824,6 +833,33 @@ class InfiniteTalkPipeline:
             else:
                 gen_video_list.append(videos[:, :, cur_motion_frames_num:])
 
+            # Segmented video saving logic --by ghx
+            if save_dir is None:
+                raise ValueError("===> save_file path must be provided for saving segmented videos.")            
+            if is_first_clip:
+                
+                gen_video = torch.cat(gen_video_list, dim=2)
+                gen_video = gen_video.to(torch.float32)  
+
+                segment_path = os.path.join(save_dir, f"{segment_counter:04d}.MP4")
+                save_video_ffmpeg_noaudio(gen_video[0], segment_path, high_quality_save=True)
+                saved_segments.append(segment_path)
+
+                gen_video_list.clear()
+
+            elif segment_counter % 20 == 19:  # Save every 20 segments (0-based: 19, 39, 59...)
+            # else:
+                gen_video = torch.cat(gen_video_list, dim=2)
+                gen_video = gen_video.to(torch.float32)  
+
+                segment_path = os.path.join(save_dir, f"{segment_counter:04d}.MP4")
+                save_video_ffmpeg_noaudio(gen_video[0], segment_path, high_quality_save=True)
+                saved_segments.append(segment_path)
+
+                gen_video_list.clear()
+
+            segment_counter += 1
+
             # decide whether is done
             if arrive_last_frame: break
 
@@ -867,12 +903,12 @@ class InfiniteTalkPipeline:
             if dist.is_initialized():
                 dist.barrier()
         
-        gen_video_samples = torch.cat(gen_video_list, dim=2)[:, :, :int(max_frames_num)] 
-        gen_video_samples = gen_video_samples.to(torch.float32)
-        if max_frames_num > frame_num and sum(miss_lengths) > 0:
-            # split video frames
-            # gen_video_samples = gen_video_samples[:, :, :-1*miss_lengths[0]]
-            gen_video_samples = gen_video_samples[:, :, :full_audio_emb.shape[0]]
+        # gen_video_samples = torch.cat(gen_video_list, dim=2)[:, :, :int(max_frames_num)] 
+        # gen_video_samples = gen_video_samples.to(torch.float32)
+        # if max_frames_num > frame_num and sum(miss_lengths) > 0:
+        #     # split video frames
+        #     # gen_video_samples = gen_video_samples[:, :, :-1*miss_lengths[0]]
+        #     gen_video_samples = gen_video_samples[:, :, :full_audio_emb.shape[0]]
         
         if dist.is_initialized():
             dist.barrier()
@@ -880,7 +916,15 @@ class InfiniteTalkPipeline:
         del noise, latent
         torch_gc()
 
-        return gen_video_samples[0] if self.rank == 0 else None
+        # Save segment list to txt file -- by ghx
+        if save_dir is not None and self.rank == 0:
+            txt_path = os.path.join(save_dir, "clips.txt")
+            with open(txt_path, 'w') as f:
+                for segment_path in saved_segments:
+                    f.write(f"{segment_path}\n")
+
+        # return gen_video_samples[0] if self.rank == 0 else None
+        return None
     
 
    
