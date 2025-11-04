@@ -95,7 +95,7 @@ CUDA_VISIBLE_DEVICES=0 python generate_infinitetalk.py \
     --motion_frame 9 \
     --sample_shift 2 \
     --num_persistent_param_in_dit 0 \
-    --save_file output/lmy/lightx2v-25fps-cfg-640 
+    --save_file output/temp/lmy1
 
 # sxy
 CUDA_VISIBLE_DEVICES=1 python generate_infinitetalk.py \

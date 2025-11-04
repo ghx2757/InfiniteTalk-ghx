@@ -916,12 +916,37 @@ class InfiniteTalkPipeline:
         del noise, latent
         torch_gc()
 
+        # Save remaining segments if any
+        if save_dir is not None and len(gen_video_list) > 0:
+            gen_video = torch.cat(gen_video_list, dim=2)
+            gen_video = gen_video.to(torch.float32)
+            segment_path = os.path.join(save_dir, f"{segment_counter:04d}")
+            save_video_ffmpeg_noaudio(gen_video[0], segment_path, high_quality_save=True)
+            saved_segments.append(segment_path)
+            gen_video_list.clear()
+
         # Save segment list to txt file -- by ghx
         if save_dir is not None and self.rank == 0:
             txt_path = os.path.join(save_dir, "clips.txt")
             with open(txt_path, 'w') as f:
                 for segment_path in saved_segments:
-                    relative_path = os.path.relpath(segment_path, save_dir)
+                    # Check if the file exists with .mp4 extension
+                    segment_path_with_ext = segment_path + '.mp4'
+                    if os.path.exists(segment_path_with_ext):
+                        relative_path = os.path.relpath(segment_path_with_ext, save_dir)
+                    else:
+                        # Try without extension (if save_video_ffmpeg_noaudio doesn't add .mp4)
+                        relative_path = os.path.relpath(segment_path, save_dir)
+                        if not os.path.exists(segment_path):
+                            # Try to find the actual file
+                            for ext in ['.mp4', '.avi', '.mov']:
+                                test_path = segment_path + ext
+                                if os.path.exists(test_path):
+                                    relative_path = os.path.relpath(test_path, save_dir)
+                                    break
+                            else:
+                                logging.warning(f"Segment file not found: {segment_path}")
+                                continue
                     f.write(f"file '{relative_path}'\n")
 
         # return gen_video_samples[0] if self.rank == 0 else None

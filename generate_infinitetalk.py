@@ -690,6 +690,37 @@ def generate(args):
     #     save_video_ffmpeg(sum_video, args.save_file, [input_data['video_audio']], high_quality_save=True) # 25
     #     # save_video_ffmpeg(sum_video, args.save_file, [input_data['video_audio']], high_quality_save=False, fps=16)
 
+
+    # by ghx
+    clips_txt_path = os.path.join(args.save_file, "clips.txt")
+    if os.path.exists(clips_txt_path):
+        # Use ffmpeg to concatenate segments from clips.txt and add audio
+        output_video_path = f"{args.save_file}.mp4"
+        ffmpeg_cmd = [
+            'ffmpeg',
+            '-f', 'concat',
+            '-safe', '0',
+            '-i', clips_txt_path,
+            '-i', input_data['video_audio'],
+            '-c:v', 'copy',
+            '-c:a', 'aac',
+            '-strict', 'experimental',
+            '-shortest',
+            '-y',  # Overwrite output file if exists
+            output_video_path
+        ]
+        subprocess.run(ffmpeg_cmd, check=True)
+        logging.info(f"Concatenated video segments from {clips_txt_path} and saved to {output_video_path}")
+    else:
+        # Fallback to original method (concatenate from generated_list)
+        # Filter out None values
+        valid_videos = [v for v in generated_list if v is not None]
+        if len(valid_videos) > 0:
+            sum_video = torch.cat(valid_videos, dim=1)
+            save_video_ffmpeg(sum_video, args.save_file, [input_data['video_audio']], high_quality_save=True) # 25
+            # save_video_ffmpeg(sum_video, args.save_file, [input_data['video_audio']], high_quality_save=False, fps=16)
+        else:
+            logging.warning("No valid videos to concatenate. Check if generate_infinitetalk is saving segments correctly.")
    
     logging.info(f"Saving generated video to {args.save_file}.mp4")  
     logging.info("Finished.")
